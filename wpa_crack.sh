@@ -69,7 +69,7 @@ get_ap_info(){
         while true;do
             read -p 'Please select the ap ssid manually: ' ap_ssid
             ap_ssid=$(echo ${ap_ssid} | sed 's/[^0-9a-zA-Z_]//g')
-            [ -z ${ap_ssid} ] && break
+            [ -z ${ap_ssid} ] || break
         done
     fi
 }
