@@ -42,26 +42,41 @@ program_exist(){
 }
 
 get_iface(){
-    iface=$(iwconfig 2>/dev/null | grep -i 'IEEE' | cut -d " " -f 1)
-    if [ -z ${iface} ];then
+    ifaces=($(iwconfig 2>/dev/null | grep -E '^[^ ]+ ' | awk '{print $1}'))
+    if [ ${#ifaces[@]} -eq 1 ];then
+        iface=${ifaces[0]}
+    elif [ ${#ifaces[@]} -gt 1 ];then
+        j=1
+        for x in ${ifaces[@]};do
+            echo -en ${j}: ${x}'\t'
+            j=$[$j + 1]
+        done
+        echo ""
+        while true;do
+            read -p 'Please select the wireless number: ' iface_num
+            [[ ${iface_num} -ge 1 && ${iface_num} -le ${#ifaces[@]} ]] && break
+        done
+        iface_num=$[${iface_num} - 1]
+        iface=${ifaces[iface_num]}
+    else
         echo "could not find wireless interface" 1>&2
         exit 1
     fi
 }
 
 stop_monitor_mode(){
-    iwconfig ${iface} 2>/dev/null | grep -q 'Mode:Monitor'
+    iwconfig ${1} 2>/dev/null | grep -q 'Mode:Monitor'
     if [ $? -eq 0 ];then
-        airmon-ng stop ${iface} &>/dev/null
-        echo 'Stop Wireless interface Monitor mode'
+        airmon-ng stop ${1} &>/dev/null
+        echo 'Stop Wireless interface Monitor mode: '${1}
     fi
 }
 
 start_monitor_mode(){
-    iwconfig ${iface} 2>/dev/null | grep -q 'Mode:Managed'
+    iwconfig ${1} 2>/dev/null | grep -q 'Mode:Managed'
     if [ $? -eq 0 ];then
-        airmon-ng start ${iface} &>/dev/null
-        echo 'Start Wireless interface Monitor mode'
+        airmon-ng start ${1} &>/dev/null
+        echo 'Start Wireless interface Monitor mode: '${1}
     fi
 }
 
@@ -120,7 +135,8 @@ handshake_check(){
     if [ $? -eq 0 ];then
         handshake_sig=0
         kill -15 ${airodump_pid[0]}
-        stop_monitor_mode
+        echo ""
+        stop_monitor_mode ${iface}
         apbssid=$(echo ${ap_bssid} | tr ":" "-")
         cap_time=$(date '+%M%S')
         cap_file=${cap_dir}/${ap_ssid}_${apbssid}_${cap_time}
@@ -142,12 +158,12 @@ handshake_check(){
     fi
 }
 
-# iface_mode=$(iwconfig ${1} 2>/dev/null | grep -oE 'Mode:[^ ]+')
 initialization(){
     confirm_run_as_root
     program_exist
-    get_iface
-    stop_monitor_mode
+    iwconfig 2>/dev/null | grep -E '^[^ ]+ ' | awk '{print $1}' | while read line;do
+        stop_monitor_mode ${line}
+    done
     CURRENT_DIR=$(cd `dirname $0`;pwd)
     cd ${CURRENT_DIR}
     handshake_sig=1
@@ -164,9 +180,9 @@ initialization(){
 scan_interface(){
     get_iface
     iface_mac=$(iwconfig ${iface} | grep -oE ${mac_pattern})
-    [ -n ${iface_mac} ] && start_monitor_mode
+    [ -n ${iface_mac} ] && start_monitor_mode ${iface}
     sleep 1
-    get_iface
+    iface=$(iwconfig 2>/dev/null | grep 'Mode:Monitor' | awk '{print $1}')
     airodump-ng -a --write-interval 1 -w ${temp_dir}/wifite ${iface}
 }
 
