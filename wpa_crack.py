@@ -33,6 +33,7 @@ GR = '\033[37m'  # gray
 ###################
 # DATA STRUCTURES #
 ###################
+
 mac_pattern=re.compile('([A-F0-9]{2}:){5}[A-F0-9]{2}',re.I)
 
 def mac_search(string):
@@ -266,8 +267,6 @@ class Wpa_Attack:
                         print(GR + ' [+]' + W + ' WPA dictionary set to %s' % (G + self.WPA_DICTIONARY + W))
                     else:
                         print(R + ' [!]' + O + ' WPA dictionary file not found: %s' % (options.dic))
-            else:
-                print(R + ' [!]' + O + ' WPA dictionary file not given!')
             if options.channel:
                 try:
                     self.channel = int(options.channel)
@@ -292,9 +291,13 @@ class Wpa_Attack:
             print(O + ' [!] ' + W + 'Start Wireless interface Monitor mode: ' + O + self.iface + W)
             proc = Popen(['iwconfig'],stdout=PIPE,stderr=DEVNULL,encoding='utf-8')
             for line in proc.communicate()[0].split('\n'):
-                if ord(line[0]) != 32:  # Doesn't start with space
+                if ord(line[0]) != 32 and line.find('Mode:Monitor') != -1:  # Doesn't start with space
                     self.iface = line[:line.find(' ')]  # is the interface
-                if line.find('Mode:Monitor') != -1:break
+                    break
+                elif ord(line[0]) != 32 and line.find('Mode:Monitor') == -1:
+                    print(R + ' [!] ' + O + self.iface + W +"doesn't support monitor mode,please change other wireless")
+                    self.stop_monitor_mode()
+                    exit(1)
 
     def stop_monitor_mode(self):
         proc = Popen(['iwconfig',self.iface],stdout=PIPE,stderr=DEVNULL,encoding='utf-8')
@@ -528,12 +531,12 @@ class Wpa_Attack:
                         self.target_key = inf.read().strip()
                         inf.close()
 
-                        print(GR + '\n [+]' + W + ' cracked %s (%s)!' % (G + self.target_essid + W, G + self.target_bssid + W))
+                        print(GR + '\n [+]' + W + ' cracked %s (%s)!' % \
+                            (G + self.target_essid + W, G + self.target_bssid + W))
                         print(GR + ' [+]' + W + ' key:    "%s"\n' % (C + self.target_key + W))
                         with open(self.cracked_csv,'a') as f:
                             f.write(self.target_essid+','+self.target_bssid+','+self.target_key+'\n')
                     else:
-                        # Did not crack
                         print(R + '\n [!]' + R + 'crack attempt failed' + O + ': passphrase not in dictionary' + W)
                     break
 
@@ -628,6 +631,11 @@ class Wpa_Attack:
                 print("\n %s %shandshake captured%s! saved as:" \
                     % (GR + sec_to_hms(seconds_running) + W, O, W))
                 print('            "%s"'% (C + cap_file + W))
+                cap2hccapx=sys.path[0]+os.sep+'cap2hccapx.bin'
+                if os.path.exists(cap2hccapx):
+                    try:
+                        call([cap2hccapx,cap_file,cap_file[:-3]+'hccapx'],stdout=DEVNULL,stderr=DEVNULL)
+                    except:pass
                 self.stop_monitor_mode()
                 if self.WPA_DICTIONARY == '':
                     print(R + ' [!]' + O + ' no WPA dictionary found! use -dict <file> command-line argument' + W)
