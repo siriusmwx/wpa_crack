@@ -30,6 +30,35 @@ P = '\033[35m'  # purple
 C = '\033[36m'  # cyan
 GR = '\033[37m'  # gray
 
+# Basic console colors
+colors = {
+    'W' : '\033[0m',  # white (normal)
+    'R' : '\033[31m', # red
+    'G' : '\033[32m', # green
+    'O' : '\033[33m', # orange
+    'B' : '\033[34m', # blue
+    'P' : '\033[35m', # purple
+    'C' : '\033[36m', # cyan
+    'GR': '\033[37m', # gray
+    'D' : '\033[2m'   # dims current color. {W} resets.
+}
+
+# Helper string replacements
+replacements = {
+    '{+}': '{W}{D}[{W}{G}+{W}{D}]{W}',
+    '{!}': '{W}{D}[{W}{R}!{W}{D}]{W}',
+    '{?}': '{W}{D}[{W}{C}?{W}{D}]{W}'
+}
+
+def color(text):
+    ''' Returns colored string '''
+    output = text
+    for (key,value) in replacements.items():
+        output = output.replace(key, value)
+    for (key,value) in colors.items():
+        output = output.replace('{%s}' % key, value)
+    return output
+
 ###################
 # DATA STRUCTURES #
 ###################
@@ -337,7 +366,7 @@ class Wpa_Attack:
                     if int(ri) >= 1 and int(ri) <= len(ifaces):break
                 self.iface=ifaces[int(ri)-1]
             except KeyboardInterrupt:
-                print('\n ' + R + '(^C)' + O + ' interrupted')
+                print('\n ' + R + '(^C)' + O + ' interrupted' + W)
                 exit(1)
         elif len(ifaces)==1:
             self.iface=ifaces[0]
@@ -438,7 +467,7 @@ class Wpa_Attack:
                 self.target_channel=self.targets[int(ri)-1][1][1]
                 self.target_essid=self.targets[int(ri)-1][1][0]
             except KeyboardInterrupt:
-                print('\n ' + R + '(^C)' + O + ' interrupted')
+                print('\n ' + R + '(^C)' + O + ' interrupted' + W)
                 self.stop_monitor_mode()
                 exit(1)
         else:
