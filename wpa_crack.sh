@@ -152,7 +152,8 @@ handshake_check(){
         cap_time=$(date '+%M%S')
         cap_file=${cap_dir}/${ap_ssid}_${apbssid}_${cap_time}
         cp ${temp_dir}/handshake-01.cap ${cap_file}.cap
-        if [ -x ${CURRENT_DIR}/cap2hccapx.bin ];then
+        if [ -f ${CURRENT_DIR}/cap2hccapx.bin ];then
+            [ -x ${CURRENT_DIR}/cap2hccapx.bin ] || chmod 555 ${CURRENT_DIR}/cap2hccapx.bin
             ${CURRENT_DIR}/cap2hccapx.bin ${cap_file}.cap ${cap_file}.hccapx &>/dev/null
         fi
         echo -e "Success!saved as ${cap_file}.cap"
