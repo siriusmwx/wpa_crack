@@ -171,6 +171,8 @@ wpa_aircrack(){
         exit 0
     fi
     if [ -f ${temp_dir}/wpakey.txt ];then
+        echo ""
+        echo "Crack success!saved key to ${cracked_csv}..."
         password=$(cat ${temp_dir}/wpakey.txt)
         echo "${ap_ssid},${apbssid},${password}" >> ${cracked_csv}
     fi
@@ -183,9 +185,8 @@ initialization(){
     iwconfig 2>/dev/null | grep -E '^[^ ]+ ' | awk '{print $1}' | while read line;do
         stop_monitor_mode ${line}
     done
-    temp_dir=${CURRENT_DIR}/temp
-    [ -d ${temp_dir} ] || mkdir -p ${temp_dir}
-    [ -d ${temp_dir} ] && chmod 777 ${temp_dir} && rm -rf ${temp_dir}/*
+    temp_dir=$(mktemp -t -d WifiteXXXXXX)
+    [ -d ${temp_dir} ] && chmod 777 ${temp_dir}
     cap_dir=${CURRENT_DIR}/handshake
     [ -d ${cap_dir} ] || mkdir -p ${cap_dir}
     cracked_csv=${CURRENT_DIR}/cracked.csv
