@@ -54,8 +54,8 @@ get_iface(){
     elif [ ${#ifaces[@]} -gt 1 ];then
         j=1
         for x in ${ifaces[@]};do
-            echo -en ${j}: ${x}'\t'
-            j=$[$j + 1]
+            echo -en "${j}: ${x}\t"
+            let j++
         done
         echo ""
         while true;do
@@ -76,7 +76,7 @@ stop_monitor_mode(){
     if [ $? -eq 0 ];then
         airmon-ng stop ${1} &>/dev/null
         echo ""
-        echo "Stop Wireless interface Monitor mode: "${1}
+        echo "Stop Wireless interface Monitor mode: ${1}"
         echo ""
     fi
 }
@@ -89,14 +89,14 @@ start_monitor_mode(){
         if [ $? -eq 0 ];then
             echo -en "Change ${1}'s MAC from ${iface_origin_mac} to ${iface_current_mac}..."
         fi
-        ifconfig ${1} up && echo 'done'
+        ifconfig ${1} up && echo "done"
     fi
-    airmon-ng start ${1} &>/dev/null && echo 'Start Wireless interface Monitor mode: '${1}
+    airmon-ng start ${1} &>/dev/null && echo "Start Wireless interface Monitor mode: ${1}"
 }
 
 get_ap_info(){
-    ap_channel=$(cat ${temp_dir}/wifite-01.csv | grep ^${ap_bssid} | cut -d ',' -f 4)
-    ap_ssid=$(cat ${temp_dir}/wifite-01.csv | grep ^${ap_bssid} \
+    ap_channel=$(cat ${temp_dir}/wifite-01.csv | grep "^${ap_bssid}" | cut -d ',' -f 4)
+    ap_ssid=$(cat ${temp_dir}/wifite-01.csv | grep "^${ap_bssid}" \
     | cut -d ',' -f 14 | sed 's/[^0-9a-zA-Z_-]//g')
     expr ${ap_channel} + 0 &>/dev/null
     if [ $? -ne 0 ];then
@@ -117,7 +117,7 @@ get_ap_info(){
 send_deauth(){
     i=0
     clients=($(cat ${temp_dir}/handshake-01.csv \
-        | grep -E ${mac_pattern}.*${mac_pattern} | grep -oE ^${mac_pattern}))
+        | grep -E "${mac_pattern}.*${mac_pattern}" | grep -oE "^${mac_pattern}"))
         if [ ${#clients[@]} -gt 0 ];then
             for client in ${clients[*]};do
                 aireplay_cmd=(aireplay-ng --ignore-negative-one --deauth 1 -a)
@@ -213,7 +213,7 @@ wpa_attack(){
     trap "stop_monitor_mode ${iface} && exit 0" SIGINT
     while true;do
         read -p 'Please select target BSSID to Crack: ' ap_bssid
-        echo ${ap_bssid} | grep -oqE ^${mac_pattern}$ && break
+        echo ${ap_bssid} | grep -oqE "^${mac_pattern}$" && break
     done
     get_ap_info
     airodump_cmd=(airodump-ng -w ${temp_dir}/handshake --write-interval 1 --bssid)
